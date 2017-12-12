@@ -1,4 +1,5 @@
 .cproject
+*.swp
 .project
 .settings
 build

@@ -482,6 +482,7 @@ public:
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - _sync_time).count();
         if ((_segment_manager->cfg.commitlog_sync_period_in_ms * 2) < uint64_t(ms)) {
+            print("cl:must_sync -> %d elapsed, must async\n");
             clogger.debug("{} needs sync. {} ms elapsed", *this, ms);
             return true;
         }
@@ -749,6 +750,7 @@ public:
      */
     future<rp_handle> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout) {
         if (must_sync()) {
+            print("seg::allocate -> must_sync\n");
             return with_timeout(timeout, sync()).then([this, id, writer = std::move(writer), permit = std::move(permit), timeout] (auto s) mutable {
                 return s->allocate(id, std::move(writer), std::move(permit), timeout);
             });
@@ -756,6 +758,7 @@ public:
 
         const auto size = writer->size(*this);
         const auto s = size + entry_overhead_size; // total size
+        print("seg::allocate -> \033[33mmutation size=%d from the writer->size(),total size=%d\033[0m\n",size,s);
         auto ep = _segment_manager->sanity_check_size(s);
         if (ep) {
             return make_exception_future<rp_handle>(std::move(ep));
@@ -763,11 +766,14 @@ public:
 
 
         if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
+            print("seg::allocate -> is_still_allocating=false or s is too big\n");
             return finish_and_get_new(timeout).then([id, writer = std::move(writer), permit = std::move(permit), timeout] (auto new_seg) mutable {
                 return new_seg->allocate(id, std::move(writer), std::move(permit), timeout);
             });
         } else if (!_buffer.empty() && (s > (_buffer.size() - _buf_pos))) {  // enough data?
+            print("seg::alocate -> _buffer not empty and s > (_buffer.size() - _buf_pos)\n");
             if (_segment_manager->cfg.mode == sync_mode::BATCH) {
+                print("seg::alocate -> _buffer not empty and s > (_buffer.size() - _buf_pos), and _seg_manager.cfg.mode=BATCH\n");
                 // TODO: this could cause starvation if we're really unlucky.
                 // If we run batch mode and find ourselves not fit in a non-empty
                 // buffer, we must force a cycle and wait for it (to keep flush order)
@@ -776,6 +782,7 @@ public:
                     return new_seg->allocate(id, std::move(writer), std::move(permit), timeout);
                 });
             } else {
+                print("seg::alocate -> \033[034m_buffer not empty and s > (_buffer.size() - _buf_pos), and _seg_manager.cfg.mode=not_BATCH, call cycle(), that is Send any buffer contents to disk and get a new tmp buffer\033[0m\n");
                 cycle().discard_result().handle_exception([] (auto ex) {
                     clogger.error("Failed to flush commits to disk: {}", ex);
                 });
@@ -786,8 +793,10 @@ public:
         if (_buffer.empty()) {
             new_buffer(s);
             buf_memory += _buf_pos;
+            print("seg::allocate -> _buffer empty, new_buffer(size=%d),local buf_memory=%d{s+_buf_pos{%d}}\n",s,buf_memory,_buf_pos);
         }
 
+        print("seg::allocate -> lastly doing these: create replay_pos rp,_buf_pos+=s, create rp_handle h(cf_holder,id,rp), create data_output ,call out.write\n");
         _gate.enter(); // this might throw. I guess we accept this?
         buf_memory -= permit.release();
         _segment_manager->account_memory_usage(buf_memory);
@@ -802,6 +811,7 @@ public:
         auto * p = _buffer.get_write() + pos;
         auto * e = _buffer.get_write() + pos + s - sizeof(uint32_t);
 
+        print("seg::allocate -> part space of segment's _buffer [%p-%p]={total_size %d - sizeof(uint32_t)} passed to data_output._ptr, later on which mutation is serilized on\n",p,e,s);
         data_output out(p, e);
         crc32_nbo crc;
 
@@ -810,6 +820,7 @@ public:
         out.write(crc.checksum());
 
         // actual data
+        print("seg::allocate -> entry_writer call write(seg_manager,data_output)\n");
         writer->write(*this, out);
 
         crc.process_bytes(p + 2 * sizeof(uint32_t), size);
@@ -823,6 +834,7 @@ public:
         _gate.leave();
 
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
+            print("seg::allocate -> cfg.mode=BATCH, call batch_cycle()\n");
             return batch_cycle(timeout).then([h = std::move(h)](auto s) mutable {
                 return make_ready_future<rp_handle>(std::move(h));
             });
@@ -831,10 +843,12 @@ public:
             // then no other request will be allowed in to force the cycle()ing of this buffer. We
             // have to do it ourselves.
             if ((_buf_pos >= (db::commitlog::segment::default_size))) {
+                print("seg::allocate -> cfg.mode=NOT_BATCH, _buf_pos(%d)>= (db::commitlog::segment::default_size), call cycle().discard_result\n",_buf_pos);
                 cycle().discard_result().handle_exception([] (auto ex) {
                     clogger.error("Failed to flush commits to disk: {}", ex);
                 });
             }
+            print("seg::allocate -> \033[031m _buf_pos=%d, not too big, so need not to cycle(). return ready_future<rp_handle> h\033[0m\n",_buf_pos);
             return make_ready_future<rp_handle>(std::move(h));
         }
     }
@@ -899,6 +913,7 @@ public:
 future<db::rp_handle>
 db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout) {
     auto size = writer->size();
+    print("segment_manager::allocate_when_possible -> check entry_writer.mutation_size()=%d, ensure not too big\n",size);
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
     // point.
@@ -911,8 +926,10 @@ db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, sha
     if (_request_controller.waiters()) {
         totals.requests_blocked_memory++;
     }
-    return fut.then([this, id, writer = std::move(writer), timeout] (auto permit) mutable {
+    return fut.then([this, id, writer = std::move(writer), timeout,size] (auto permit) mutable {
+        print("segment_manager::allocate_when_possible -> get writer.size()=%d units from _request_controller ok, ready to get active_seg\n",size);
         return this->active_segment(timeout).then([this, timeout, id, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
+            print("segment_manager::allocate_when_possible -> found the active segment.descriptor=%s, and call allocate(uuid,cl_entry_writer,permit,to) on it\n",s);
             return s->allocate(id, std::move(writer), std::move(permit), timeout);
         });
     });
@@ -1182,6 +1199,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         throw std::runtime_error("Commitlog has been shut down. Cannot add data");
     }
 
+    print("db::commitlog::segment_manager -> new_segment(), ++_new_counter\n");
     ++_new_counter;
 
     if (_reserve_segments.empty() && (_reserve_segments.max_size() < cfg.max_reserve_segments)) {
@@ -1200,20 +1218,24 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     // make sure later invocations can still pick that segment up once it's ready.
     return repeat_until_value([this, timeout] () -> future<stdx::optional<sseg_ptr>> {
         if (!_segments.empty() && _segments.back()->is_still_allocating()) {
+            print("db::commitlog::segment_manager::active_segment -> segs not empty, and back() seg not closed and its pos < max_size, returns a optinal<seg>\n");
             return make_ready_future<stdx::optional<sseg_ptr>>(_segments.back());
         }
         return [this, timeout] {
             if (!_segment_allocating) {
+                print("db::commitlog::segment_manager::active_segment -> _segment_allocating false, so emplace a promise's future into _segment_allocating\n");
                 promise<> p;
                 _segment_allocating.emplace(p.get_future());
                 auto f = _segment_allocating->get_future(timeout);
                 with_gate(_gate, [this] {
                     return new_segment().discard_result().finally([this]() {
+                        print("db::commitlog::segment_manager::active_segment -> new_seg allocate ok, finally,set _segment_allocating to nullopt\n");
                         _segment_allocating = stdx::nullopt;
                     });
                 }).forward_to(std::move(p));
                 return f;
             } else {
+                print("db::commitlog::segment_manager::active_segment -> segment_allocating true\n");
                 return _segment_allocating->get_future(timeout);
             }
         }().then([] () -> stdx::optional<sseg_ptr> {
@@ -1491,9 +1513,11 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
             if (_writer.with_schema()) {
                 seg.add_schema_version(_writer.schema());
             }
+            print("db::commitlog::add_entry::cl_entry_writer -> commitlog_entry_writer.write(out) called\n");
             _writer.write(out);
         }
     };
+    print("db::commitlog::add_entry -> ready to call _segment_manager->allocate_when_possible with parameter(uuid=%s,cl_entry_writer,timeout)\n",id.to_sstring());
     auto writer = ::make_shared<cl_entry_writer>(cew);
     return _segment_manager->allocate_when_possible(id, writer, timeout);
 }

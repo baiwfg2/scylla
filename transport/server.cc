@@ -268,6 +268,7 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     , _notifier(std::make_unique<event_notifier>())
     , _lb(lb)
 {
+    print("cql_server():271 -> cql_server ctor called(0x%x)\n",pthread_self());
     namespace sm = seastar::metrics;
 
     _metrics.add_group("transport", {
@@ -327,14 +328,18 @@ cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_bui
         throw std::runtime_error(sprint("CQLServer error while listening on %s -> %s", make_ipv4_address(addr), std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
+    print("when_all call before(0x%x)\n",pthread_self());
     _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
+    print("when_all call after(0x%x)\n",pthread_self());
     return make_ready_future<>();
 }
 
 future<>
 cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
     ++_connections_being_accepted;
+    print("do_accepts called(0x%x)\n",pthread_self());
     return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<connected_socket, socket_address> f_cs_sa) mutable {
+        print("cql_server::do_accepts -> server_socket accept done(0x%x)\n",pthread_self());
         --_connections_being_accepted;
         if (_stopping) {
             f_cs_sa.ignore_ready_future();
@@ -346,10 +351,12 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
         auto addr = std::get<1>(std::move(cs_sa));
         fd.set_nodelay(true);
         fd.set_keepalive(keepalive);
+        print("set connected_socket some property done\n");
         auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
         ++_connects;
         ++_connections;
         conn->process().then_wrapped([this, conn] (future<> f) {
+            print("cql_server::do_accepts -> conn done process, decrement _connections\n");
             --_connections;
             try {
                 f.get();
@@ -357,6 +364,7 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
                 clogger.debug("connection error: {}", std::current_exception());
             }
         });
+        print("cql_server::do_accepts -> continue do_accepts\n");
         return do_accepts(which, keepalive, server_addr);
     }).then_wrapped([this, which, keepalive, server_addr] (future<> f) {
         try {
@@ -365,6 +373,7 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
             clogger.debug("accept failed: {}", std::current_exception());
             return do_accepts(which, keepalive, server_addr);
         }
+        print("cql_server::do_accepts -> return ready future\n");
         return make_ready_future<>();
     });
 }
@@ -590,6 +599,7 @@ future<> cql_server::connection::process()
             return write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
         }
     }).finally([this] {
+        print("cql_server::connection::process -> client disconnect, unregister_connection\n");
         _server._notifier->unregister_connection(this);
         return _pending_requests_gate.close().then([this] {
             return _ready_to_respond.finally([this] {
@@ -653,9 +663,12 @@ future<> cql_server::connection::process_request() {
                 auto cpu = pick_request_cpu();
                 return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested] () mutable {
                     return process_request_stage(this, bv, op, stream, std::move(client_state), tracing_requested).then([] (auto&& response) {
+                        //the following print will be called periodically, better to comment out
+                        //print("cql_server::connection::process_request -> \033[34m(process_request_stage <- process_request_one) returns response_type,convert it to pair<foreign_ptr,client_state>\033[0m\n");
                         return std::make_pair(make_foreign(response.first), response.second);
                     });
                 }).then([this, flags] (auto&& response) {
+                    //print("cql_server::connection::process_request -> \033[33mreturn from submit_to's func on one cpu, merge the client_state(response.second), and write_response(response.first) with compression\033[0m\n");
                     _client_state.merge(response.second);
                     return this->write_response(std::move(response.first), _compression);
                 }).then([buf = std::move(buf), mem_permit = std::move(mem_permit)] {
@@ -813,6 +826,7 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
          return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
+        print("cql_server::connection::process_query -> qp.process() returns result, convert it to response_type\n");
         return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }
@@ -1154,6 +1168,7 @@ cql_server::connection::make_result(int16_t stream, shared_ptr<messages::result_
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
     fmt_visitor fmt{_version, response, skip_metadata};
+    //print("make_result -> msg type is %s, ready to call result_message::accept, which in turn is visited by its parameter, fmt_visitor(inherited from visitor_base, which inherit from abstract visitor). In all overrided visit method, just write some value to reponse object\n",typeid(*msg).name());
     msg->accept(fmt);
     return response;
 }

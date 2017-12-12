@@ -333,6 +333,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     } else {
         return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), state.get_trace_state())
             .then([this, &options, now, cmd] (auto result) {
+                print("select_statment::execute -> storage_proxy has got all replicas's response\n");
                 return this->process_results(std::move(result), cmd, options, now);
             });
     }

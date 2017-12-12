@@ -263,6 +263,7 @@ public:
 
 int main(int ac, char** av) {
   int return_value = 0;
+  printf("debug#main thread 0x%lx started\n",pthread_self());
   try {
     // early check to avoid triggering
     if (!cpu_sanity()) {
@@ -279,7 +280,7 @@ int main(int ac, char** av) {
     bool help_version = false;
     auto init = app.get_options_description().add_options();
 
-    cfg->add_options(init);
+    cfg->add_options(init);//定义在config.hh的宏中
     for (configurable& c : configurables()) {
         c.append_options(init);
     }
@@ -301,6 +302,8 @@ int main(int ac, char** av) {
     directories dirs;
 
     return app.run_deprecated(ac, av, [&] {
+        auto t = time(0);
+        printf("%s debug# main thread 0x%lx: app::run_deprecated's func started\n",ctime(&t), pthread_self());
         if (help_version) {
             print("%s\n", scylla_version());
             engine().exit(0);
@@ -324,6 +327,8 @@ int main(int ac, char** av) {
         tcp_syncookies_sanity();
 
         return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator] {
+            //auto t = time(0);
+            //printf("%s debug#main thread seastar::async 0x%lx started\n",ctime(&t), pthread_self());
             read_config(opts, *cfg).get();
             for (configurable& c : configurables()) {
                 c.initialize(opts).get();
@@ -672,6 +677,7 @@ int main(int ac, char** av) {
                     return db.get_compaction_manager().stop();
                 });
             });
+			printf("debug#seastar::async end\n");
         }).then_wrapped([&return_value] (auto && f) {
             try {
                 f.get();

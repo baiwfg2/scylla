@@ -220,6 +220,7 @@ public:
         --_proxy->_stats.writes;
         if (_cl_achieved) {
             if (_throttled) {
+                print("abstract_write_response_handler::~abstract_write_response_handler -> _ready.set_value() when cl is acheived and throttled\n");
                 _ready.set_value();
             } else {
                 _proxy->_stats.background_writes--;
@@ -227,6 +228,7 @@ public:
                 _proxy->unthrottle();
             }
         } else if (_timedout) {
+            print("abstract_write_response_handler::~abstract_write_response_handler -> _ready.set_exception() when cl not acheived and timed out\n");
             _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
         }
     };
@@ -234,6 +236,7 @@ public:
         return _type == db::write_type::COUNTER;
     }
     void unthrottle() {
+        print("abstract_write_response_handler::unthrottle -> _ready.set_value()\n");
         _proxy->_stats.background_writes++;
         _proxy->_stats.background_write_bytes += _mutation_holder->size();
         _throttled = false;
@@ -244,10 +247,12 @@ public:
         if (!_cl_achieved && _cl_acks >= _total_block_for) {
              _cl_achieved = true;
              if (_proxy->need_throttle_writes()) {
+                 print("abstract_write_response_handler::signal -> when _stats.background_write_bytes too big,or _stats.queued_write_bytes>6M, turn on throttle. push id=%d to circular buffer\n",_id);
                  _throttled = true;
                  _proxy->_throttled_writes.push_back(_id);
                  ++_proxy->_stats.throttled_writes;
              } else {
+                 print("abstract_write_response_handler::signal -> proxy neednot throttle write, unthrottle\n");
                  unthrottle();
              }
          }
@@ -372,6 +377,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
             // we are here because either cl was achieved, but targets left in the handler are not
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
+            print("sp::register_response_handler -> e.handler:%s is cl_archived or cl=ANY, call hint_to_dead_endpoints and signal the hints to handler\n",typeid(*e.handler).name());
             auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets());
             e.handler->signal(hints);
             if (e.handler->_cl == db::consistency_level::ANY && hints) {
@@ -383,6 +389,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
         remove_response_handler(id);
     }));
     assert(e.second);
+    print("sp::register_response_handler -> emplace a pair<response_id,rh_entry> to map object: _response_handler, and return the response_id=%d\n",id);
     return id;
 }
 
@@ -394,9 +401,12 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second.handler->get_trace_state(), "Got a response from /{}", from);
+        print("sp::got_response -> find rh_entry from `_response_handler` given response_type_id=%d ,check its `rh_entry.handler->response()` return true or false\n",id);
         if (it->second.handler->response(from)) {
+            print("sp::got_response -> rh_entry.handler=%s -> response(from=%s) returns true, then remove the handler\n",typeid(*(it->second.handler)).name(),from.to_sstring());
             remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
         }
+        else print("sp::got_response -> rh_entry.handler=%s -> response(%s) returns false\n",typeid(*it->second.handler).name(),from.to_sstring());
     }
 }
 
@@ -405,6 +415,7 @@ future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_
 
     e.expire_timer.arm(timeout);
 
+    print("sp::response_wait -> call %s -> wait()(just invoke _ready.get_future(), when cl is achived)\n",typeid(*e.handler).name());
     return e.handler->wait();
 }
 
@@ -425,6 +436,7 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     } else {
         h = ::make_shared<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_endpoints, std::move(dead_endpoints), std::move(tr_state));
     }
+    print("sp::create_write_response_handler -> \033[31mthe real create_write_response_handler is here, make_shared abstract_write_response_handler is %s, and register_response_hander \033[0m\n",typeid(*h).name());
     return register_response_handler(std::move(h));
 }
 
@@ -974,7 +986,9 @@ storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout)
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
+    print("sp::mutate_locally -> get shard=%d from dht::partioner\n",shard);
     return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
+        print("sp::mutate_locally -> call db.apply\n");
         return db.apply(gs, m, timeout);
     });
 }
@@ -1030,12 +1044,14 @@ storage_proxy::mutate_streaming_mutation(const schema_ptr& s, utils::UUID plan_i
 storage_proxy::response_id_type
 storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state) {
     auto keyspace_name = m.schema()->ks_name();
+    print("sp::create_write_response_handler -> mutations's keyspace is %s\n",keyspace_name);
     keyspace& ks = _db.local().find_keyspace(keyspace_name);
     auto& rs = ks.get_replication_strategy();
     std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
     std::vector<gms::inet_address> pending_endpoints =
         get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), keyspace_name);
 
+    print("sp::create_write_response_handler -> get natural_endpoints and pending_endpoints from `abstract_replication_strtegy` call parameterized with (mutation.token)\n");
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints ,pending_endpoints);
 
@@ -1069,6 +1085,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
 
     db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
 
+    print("sp::create_write_response_handler -> after get live endpoints and dead endpoints, call the real create_write_response_handler\n");
     return create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), std::move(live_endpoints), pending_endpoints, std::move(dead_endpoints), std::move(tr_state));
 }
 
@@ -1105,7 +1122,9 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
     return futurize<std::vector<storage_proxy::unique_response_handler>>::apply([this] (const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
         std::vector<unique_response_handler> ids;
         ids.reserve(std::distance(std::begin(mutations), std::end(mutations)));
+        print("sp::mutate_prepare -> apply's func receive `create_handler` from the first mutate_prepare. reserve %d{mutations distance} capacity for vector<unique_response_handler>\n",ids.capacity());
         for (auto& m : mutations) {
+            print("sp::mutate_prepare -> call create_handler(which return `response_id_type`) and push_back unique_response_handler to ids\n");
             ids.emplace_back(*this, create_handler(m, cl, type));
         }
         return make_ready_future<std::vector<unique_response_handler>>(std::move(ids));
@@ -1114,7 +1133,9 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
 
 template<typename Range>
 future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state) {
+    print("sp::mutate_prepare -> move a func to another overrided mutate_prepare::2's CreateHandler object\n");
     return mutate_prepare<>(mutations, cl, type, [this, tr_state = std::move(tr_state)] (const typename Range::value_type& m, db::consistency_level cl, db::write_type type) mutable {
+        print("sp::mutate_prepare -> this print must be following this statment:`ids.emplace_back(*this, create_handler(m, cl, type));`\n");
         return create_write_response_handler(m, cl, type, tr_state);
     });
 }
@@ -1131,6 +1152,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
 
         auto timeout = timeout_opt.value_or(clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
         // call before send_to_live_endpoints() for the same reason as above
+        print("sp::mutate_begin -> ready to call response_wait()\n");
         auto f = response_wait(response_id, timeout);
         send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
         return std::move(f);
@@ -1148,6 +1170,7 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
     try {
         mutate_result.get();
         tracing::trace(trace_state, "Mutation successfully completed");
+        print("sp::mutate_end -> After a new query, mutate_result.get() returns, mutation successfully completed\n");
         return make_ready_future<>();
     } catch (no_such_keyspace& ex) {
         tracing::trace(trace_state, "Mutation failed: write to non existing keyspace: {}", ex.what());
@@ -1203,6 +1226,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
 template<typename Range>
 future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
     if (boost::empty(mutations)) {
+        print("sp::mutate_counters -> counter mutations empty\n");
         return make_ready_future<>();
     }
 
@@ -1214,6 +1238,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     std::unordered_map<gms::inet_address, std::vector<frozen_mutation_and_schema>> leaders;
     for (auto& m : mutations) {
         auto leader = find_leader_for_counter_update(m, cl);
+        print("sp::mutate_counters -> choose a leader for each mutation\n");
         leaders[leader].emplace_back(frozen_mutation_and_schema { freeze(m), m.schema() });
         // FIXME: check if CL can be reached
     }
@@ -1239,6 +1264,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             }
         };
 
+        print("sp::mutate_counters -> mutate_counter\n");
         auto f = make_ready_future<>();
         if (endpoint == my_address) {
             f = this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state);
@@ -1316,8 +1342,10 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
                          : (std::next(std::begin(mutations)) == std::end(mutations) ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH);
     utils::latency_counter lc;
     lc.start();
-
+    
+    print("sp::mutate_internal -> write_type=%s,start to mutate_prepare:0\n",type);
     return mutate_prepare(mutations, cl, type, tr_state).then([this, cl, timeout_opt] (std::vector<storage_proxy::unique_response_handler> ids) {
+        print("sp::mutate_internal -> mutate_prepare done, ready to call mutate_begin()\n");
         return mutate_begin(std::move(ids), cl, timeout_opt);
     }).then_wrapped([p = shared_from_this(), lc, tr_state] (future<> f) mutable {
         return p->mutate_end(std::move(f), lc, std::move(tr_state));
@@ -1338,6 +1366,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
         assert(!raw_counters);
         return mutate_atomically(std::move(mutations), cl, std::move(tr_state));
     }
+    print("sp::mutate_with_triggers non-atomically mutate,raw_counter=false\n");
     return mutate(std::move(mutations), cl, std::move(tr_state), raw_counters);
 #if 0
     }
@@ -1504,14 +1533,17 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
     auto all = boost::range::join(local, dc_groups);
     auto my_address = utils::fb_utilities::get_broadcast_address();
+    print("sp::send_to_live_endpoints -> \033[34mgetting dc and local info through the given response_id and _response_handler; my_broadcast_addr=%s\033[0m\n",my_address.to_sstring());
 
     // lambda for applying mutation locally
     auto lmutate = [handler_ptr, response_id, this, my_address, timeout] (lw_shared_ptr<const frozen_mutation> m) mutable {
         tracing::trace(handler_ptr->get_trace_state(), "Executing a mutation locally");
         auto s = handler_ptr->get_schema();
+        print("sp::send_to_live_endpoints -> cf.views.empty, so apply mutation locally\n");
         return mutate_locally(std::move(s), *m, timeout).then([response_id, this, my_address, m, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
+            print("sp::send_to_live_endpoints(in lmutate lambda) -> \033[33mmutate_locally done, call got_response\033[0m\n");
             got_response(response_id, my_address);
         });
     };
@@ -1525,6 +1557,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         auto& tr_state = handler_ptr->get_trace_state();
         tracing::trace(tr_state, "Sending a mutation to /{}", coordinator);
 
+        print("sp::send_to_live_endpoints -> cf.views.not.empty, so apply mutation remotely\n");
         return ms.send_mutation(netw::messaging_service::msg_addr{coordinator, 0}, timeout, m,
                 std::move(forward), my_address, engine().cpu_id(), response_id, tracing::make_trace_info(tr_state)).finally([this, p = shared_from_this(), h = std::move(handler_ptr), msize] {
             _stats.queued_write_bytes -= msize;
@@ -1542,6 +1575,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         future<> f = make_ready_future<>();
 
 
+        print("sp::send_to_live_endpoints -> get frozen_mutation from %s.get_mutation_for(coordinator)\n",typeid(handler).name());
         lw_shared_ptr<const frozen_mutation> m = handler.get_mutation_for(coordinator);
 
         if (!m || (handler.is_counter() && coordinator == my_address)) {
@@ -1554,8 +1588,10 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             }
 
             if (coordinator == my_address) {
+                print("sp::send_to_live_endpoints -> coordinator == broadcast_addr,apply mutation locally\n");
                 f = futurize<void>::apply(lmutate, std::move(m));
             } else {
+                print("sp::send_to_live_endpoints -> coordinator != broadcast_addr ,apply mutation remotely\n");
                 f = futurize<void>::apply(rmutate, coordinator, std::move(forward), *m);
             }
         }
@@ -1582,6 +1618,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 template<typename Range>
 size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets) noexcept
 {
+    print("sp::hint_to_dead_endpoints -> binding &storage_proxy::submit_hint\n");
     return boost::count_if(targets | boost::adaptors::filtered(std::bind1st(std::mem_fn(&storage_proxy::should_hint), this)),
             std::bind(std::mem_fn(&storage_proxy::submit_hint), this, std::ref(mh), std::placeholders::_1));
 }
@@ -2637,6 +2674,7 @@ public:
                 std::tie(result, digests_match) = f.get(); // can throw
 
                 if (digests_match) {
+                    //print("digests_match ! setting exec->result_promise value\n");
                     exec->_result_promise.set_value(std::move(result));
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
                         background_repair_check = true;
@@ -3135,6 +3173,7 @@ storage_proxy::do_query(schema_ptr s,
 
     if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
         try {
+            print("partition_range[0] is_single_partition\n");
             return query_singular(cmd, std::move(partition_ranges), cl, std::move(trace_state)).finally([lc, p] () mutable {
                     p->_stats.read.mark(lc.stop().latency());
                     if (lc.is_start()) {

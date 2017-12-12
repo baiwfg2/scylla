@@ -211,10 +211,12 @@ void partition_entry::set_version(partition_version* new_version)
 void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema)
 {
     if (!_snapshot) {
+        print("partition_entry::apply -> _snapshot=false, call partition.apply()\n");
         _version->partition().apply(s, mp, mp_schema);
     } else {
         mutation_partition mp1 = mp;
         if (s.version() != mp_schema.version()) {
+            print("partition_entry::apply -> version not equal, upgrade(mp_schema,schema)\n");
             mp1.upgrade(mp_schema, s);
         }
         auto new_version = current_allocator().construct<partition_version>(std::move(mp1));

@@ -554,6 +554,7 @@ memtable::apply(const mutation& m, db::rp_handle&& h) {
 
 void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
+    print("memtable::apply ->\n");
     with_allocator(allocator(), [this, &m, &m_schema] {
         _allocating_section(*this, [&, this] {
           with_linearized_managed_bytes([&] {

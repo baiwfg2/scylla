@@ -188,6 +188,8 @@ future<> query_processor::stop() {
 future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
     log.trace("process: \"{}\"", query_string);
+    //if (query_string.find("system") == sstring_view::npos)
+        print("qp::process 191 -> query_string =\033[34m %s \033[0m\n",query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
     options.prepare(p->bound_names);
@@ -212,20 +214,25 @@ query_processor::process_statement(
         const query_options& options) {
     return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options]() {
         auto& client_state = query_state.get_client_state();
-
+        auto name = typeid(*statement).name();
+        //print("statement is %s\n",name);
         statement->validate(_proxy, client_state);
 
         auto fut = make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
         if (client_state.is_internal()) {
+            print("query_processor::process_statement -> ready to execute_internal\n");
             fut = statement->execute_internal(_proxy, query_state, options);
         } else  {
+            print("query_processor::process_statement -> non-internal statement, call %s::execute\n",name);
             fut = statement->execute(_proxy, query_state, options);
         }
 
-        return fut.then([statement] (auto msg) {
+        return fut.then([name,statement] (auto msg) {
             if (msg) {
+                print("query_processor::process_statement -> %s->execute() done, returns %s\n",name,typeid(*msg).name());
                 return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
             }
+            print("query_processor::process_statement -> %s.execute return void future\n",name);
             return make_ready_future<::shared_ptr<result_message>>(
                 ::make_shared<result_message::void_message>());
         });
@@ -520,6 +527,7 @@ query_processor::process(
     auto opts = make_internal_options(p, values, cl);
     return do_with(std::move(opts), [this, p = std::move(p)](auto & opts) {
         return p->statement->execute(_proxy, *_internal_state, opts).then([](auto msg) {
+            print("query_processor::process -> execute done, convert result to untyped_result_set\n");
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });

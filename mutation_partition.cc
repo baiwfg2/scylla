@@ -321,12 +321,14 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
 void
 mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
     if (s.version() != p_schema.version()) {
+        print("mutation_partition::apply -> s.version() != p_schema.version()\n");
         auto p2 = p;
         p2.upgrade(p_schema, s);
         apply(s, std::move(p2));
         return;
     }
 
+    print("mutation_partition::apply -> assign mp to tmp_mp\n");
     mutation_partition tmp(p);
     apply(s, std::move(tmp));
 }

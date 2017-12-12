@@ -367,12 +367,15 @@ modification_statement::do_execute(distributed<service::storage_proxy>& proxy, s
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
     if (has_conditions()) {
+        print("modification_statement::do_execute -> statement has condition\n");
         return execute_with_condition(proxy, qs, options);
     }
 
+    print("modification_statement::do_execute -> statement has no condition\n");
     inc_cql_stats();
 
     return execute_without_condition(proxy, qs, options).then([] {
+        print("modification_statement::do_execute -> method return path is : \033[34mexecute_without_condition <- mutate_with_triggers <- mutate <- do_mutate <- {mutate_counter&mutate_inernal} <- mutate_end <- mutate_begin <- sp.respons_wait, which is signaled by sp.got_response <- handler.response(from) <- signal() <- unthrottle \033[0m, finally return: future<::shared_ptr<cql_transport::messages::result_message>>\n");
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
                 ::shared_ptr<cql_transport::messages::result_message>{});
     });
@@ -384,6 +387,7 @@ modification_statement::execute_without_condition(distributed<service::storage_p
     if (is_counter()) {
         db::validate_counter_for_write(s, cl);
     } else {
+        print("modification_statement::execute_without_condition -> is not counter, validate for write ks=%s,cl=%d\n",s->ks_name(),int(cl));
         db::validate_for_write(s->ks_name(), cl);
     }
 

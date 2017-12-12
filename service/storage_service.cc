@@ -1961,7 +1961,9 @@ future<> storage_service::start_native_transport() {
         if (ss._cql_server) {
             return make_ready_future<>();
         }
+        print("start_native_transport:1964 -> before make_shared  a cql_server instance\n");
         auto cserver = make_shared<distributed<cql_transport::cql_server>>();
+        print("start_native_transport:1964 -> after make_shared  a cql_server instance\n");
         ss._cql_server = cserver;
 
         auto& cfg = ss._db.local().get_config();
@@ -1976,6 +1978,7 @@ future<> storage_service::start_native_transport() {
                 //    return cserver->stop();
                 //});
 
+                print("start_native_transport:1980 -> all instance on lcore are started\n");
                 auto f = make_ready_future();
 
                 struct listen_cfg {

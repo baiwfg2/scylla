@@ -2305,8 +2305,10 @@ future<> sstable::write_components(
     }
     seastar::thread_attributes attr;
     attr.scheduling_group = cfg.thread_scheduling_group;
+    print("sstable::write_components -> aysnc started\n");
     return seastar::async(std::move(attr), [this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, pc);
+        print("sstable::write_components -> get_writer return a sstable_writer\n");
         consume_flattened_in_thread(mr, wr);
     });
 }

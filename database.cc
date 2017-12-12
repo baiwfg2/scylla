@@ -3100,6 +3100,7 @@ void column_family::do_apply(db::rp_handle&& h, Args&&... args) {
     db::replay_position rp = h;
     check_valid_rp(rp);
     try {
+        print("column_family::do_apply -> find active memtable, and apply\n");
         _memtables->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
         _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
@@ -3311,6 +3312,7 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     auto& cf = find_column_family(m.column_family_id());
     return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
+            print("db::apply_in_memory -> run_when_memory_available's func called\n");
             auto& cf = find_column_family(m.column_family_id());
             cf.apply(m, m_schema, std::move(h));
         } catch (no_such_column_family&) {
@@ -3367,11 +3369,14 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
     auto cl = cf.commitlog();
     if (cl != nullptr) {
+        print("db::apply_with_commitlog -> \033[34mcf.commitlog not null,pass schema and mutation to commitlog_entry_writer for later write\033[0m\n");
         commitlog_entry_writer cew(s, m);
         return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
+            print("db::apply_with_commitlog -> cf.commitlog() add_entry ok, rp_handle.replay_pos=%s, ready to apply_in_memory\n",h.rp());
             return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception(maybe_handle_reorder);
         });
     }
+    print("db::apply_with_commitlog -> cf.commitlog is null, call apply_in_memory directly\n");
     return apply_in_memory(m, std::move(s), {}, timeout);
 }
 
@@ -3386,11 +3391,14 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
                                  s->ks_name(), s->cf_name(), s->version()));
     }
     if (cf.views().empty()) {
+        print("db::do_apply -> cf views empty, call apply_with_commitlog\n");
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
     }
+    print("db::do_apply -> cf views not empty, call cf.push_view_replica_updates\n");
     auto f = cf.push_view_replica_updates(s, m);
     return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] {
         auto& cf = find_column_family(uuid);
+        print("db::do_apply -> cf.push_view_replica_updates done, call apply_with_commitlog\n");
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
     });
 }
@@ -3404,6 +3412,7 @@ template<typename Future>
 Future database::update_write_metrics(Future&& f) {
     return f.then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
+            print("db::update_write_metrics -> check apply_stage's results, failed\n");
             ++s->total_writes_failed;
             try {
                 f.get();
@@ -3414,6 +3423,7 @@ Future database::update_write_metrics(Future&& f) {
             assert(0 && "should not reach");
         }
         ++s->total_writes;
+        print("db::update_write_metrics -> check apply_stage's results, good, total_write=%d\n",s->total_writes);
         return f;
     });
 }
@@ -3422,6 +3432,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
+    print("db::apply -> ready to create db_apply stage and call do_apply\n");
     return update_write_metrics(apply_stage(this, std::move(s), seastar::cref(m), timeout));
 }
 
