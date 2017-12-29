@@ -98,6 +98,7 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
     // We could switch to boost::intrusive_map<> similar to what we have for row keys.
     auto& outer = current_allocator();
     return with_allocator(standard_allocator(), [&, this] () -> partition_entry& {
+        print("memtable::find_or_create_partition_slow -> i_partitioner get decorated_key(token,pk)\n");
         auto dk = dht::global_partitioner().decorate_key(*_schema, key);
         return with_allocator(outer, [&dk, this] () -> partition_entry& {
           return with_linearized_managed_bytes([&] () -> partition_entry& {
@@ -116,9 +117,12 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
     if (i == partitions.end() || !key.equal(*_schema, i->key())) {
         memtable_entry* entry = current_allocator().construct<memtable_entry>(
             _schema, dht::decorated_key(key), mutation_partition(_schema));
+        print("memtable::find_or_create_partition -> passed with decorated_key, not found the required partition_key=%s, so create a memtable_entry and insert it into partitions{it's bi::set<memtable_entry>}\n",key._key);
+        //partitions is bi::set<memtable_entry> type
         i = partitions.insert(i, *entry);
         return entry->partition();
     } else {
+        print("memtable::find_or_create_partition -> passed with decorated_key, found lower_bound, so upgrade_entry\n");
         upgrade_entry(*i);
     }
     return i->partition();
@@ -523,6 +527,7 @@ memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
 void
 memtable::update(db::rp_handle&& h) {
     db::replay_position rp = h;
+    print("memtable::update -> may update the replay_position and rp_set\n");
     if (_replay_position < rp) {
         _replay_position = rp;
     }
@@ -554,10 +559,11 @@ memtable::apply(const mutation& m, db::rp_handle&& h) {
 
 void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
-    print("memtable::apply ->\n");
+    print("memtable::apply -> passed with frozen_mutation,schema,rp_handle\n");
     with_allocator(allocator(), [this, &m, &m_schema] {
-        _allocating_section(*this, [&, this] {
+        _allocating_section(*this, [&, this] { //Invokes func with reclaim_lock on region cur_region
           with_linearized_managed_bytes([&] {
+            print("memtable::apply -> find_or_create_partition_slow get a partition_entry, then partition_entry.apply with memtable's schema,m's partition and m_schema\n");
             auto& p = find_or_create_partition_slow(m.key(*_schema));
             p.apply(*_schema, m.partition(), *m_schema);
           });

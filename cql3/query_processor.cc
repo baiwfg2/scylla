@@ -322,6 +322,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
         cf_stmt->prepare_keyspace(client_state);
     }
     ++_stats.prepare_invocations;
+    print("query_processor::get_statement -> statement:%s ready to create a prepared_statement\n",typeid(*statement).name());
     return statement->prepare(_db.local(), _cql_stats);
 }
 

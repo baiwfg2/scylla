@@ -165,6 +165,10 @@ modification_statement::get_mutations(distributed<service::storage_proxy>& proxy
                         this->add_update_for_key(m, r, *params_ptr);
                     }
                 }
+                std::for_each(mutations.begin(),mutations.end(),[](auto mutation) {
+                    print("modification_statement::get_mutations -> assemble update_parameter and partition_keys,clustering_ranges into mutation=%s\n",mutation);
+                    });
+
                 return make_ready_future<decltype(mutations)>(std::move(mutations));
             });
 }
@@ -180,6 +184,7 @@ modification_statement::make_update_parameters(
         tracing::trace_state_ptr trace_state) {
     return read_required_rows(proxy, *keys, std::move(ranges), local, options.get_consistency(), std::move(trace_state)).then(
             [this, &options, now] (auto rows) {
+                print("modification_statement::make_update_parameters -> return prefetched_rows_type from read_required_rows(), ready to assemble into update_parameters\n");
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
                                 this->get_timestamp(now, options),
@@ -264,6 +269,7 @@ modification_statement::read_required_rows(
         db::consistency_level cl,
         tracing::trace_state_ptr trace_state) {
     if (!requires_read()) {
+        print("modification_statement::read_required_rows > not required read\n");
         return make_ready_future<update_parameters::prefetched_rows_type>(
                 update_parameters::prefetched_rows_type{});
     }

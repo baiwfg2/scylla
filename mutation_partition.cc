@@ -383,6 +383,7 @@ mutation_partition::apply(const schema& s, mutation_partition&& p, const schema&
 
 void
 mutation_partition::apply(const schema& s, mutation_partition&& p) {
+    print("mp::apply2 -> handle static row and row_tombstone, passed with schema and mutation_partition\n");
     auto revert_row_tombstones = _row_tombstones.apply_reversibly(s, p._row_tombstones);
 
     _static_row.apply_reversibly(s, column_kind::static_column, p._static_row);
@@ -402,11 +403,15 @@ mutation_partition::apply(const schema& s, mutation_partition&& p) {
 void
 mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
     if (p_schema.version() == s.version()) {
+        //print("mp::apply1 -> mp_schema.version() == s.version()\n");
         mutation_partition p2(*this, copy_comparators_only{});
         partition_builder b(s, p2);
+        //print("mp::apply1 -> create a local partition_builder, which is mutation_partition_visitor\n");
         p.accept(s, b);
+        //print("mp::apply1 -> after accepting(s,builder), call apply2 for p2\n");
         apply(s, std::move(p2));
     } else {
+        //print("mp::apply1 -> mp_schema.version() != s.version()\n");
         mutation_partition p2(*this, copy_comparators_only{});
         partition_builder b(p_schema, p2);
         p.accept(p_schema, b);

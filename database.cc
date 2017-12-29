@@ -3312,8 +3312,8 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     auto& cf = find_column_family(m.column_family_id());
     return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
-            print("db::apply_in_memory -> run_when_memory_available's func called\n");
             auto& cf = find_column_family(m.column_family_id());
+            print("db::apply_in_memory -> when cf.dirty_memory_region_group's parents have no blocked_requests and no pressue, cur lambda is called. In it, cf.apply()\n");
             cf.apply(m, m_schema, std::move(h));
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());

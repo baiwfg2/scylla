@@ -677,7 +677,7 @@ int main(int ac, char** av) {
                     return db.get_compaction_manager().stop();
                 });
             });
-			printf("debug#seastar::async end\n");
+			printf("debug#seastar::async end.Things done: create and start db,mm,qp,sp ... on lcore, start rpc,api,thrift, load all kinds of directories, do compaction\n");
         }).then_wrapped([&return_value] (auto && f) {
             try {
                 f.get();

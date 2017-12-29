@@ -988,7 +988,7 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clo
     auto shard = _db.local().shard_of(m);
     print("sp::mutate_locally -> get shard=%d from dht::partioner\n",shard);
     return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
-        print("sp::mutate_locally -> call db.apply\n");
+        print("sp::mutate_locally -> convert schema to global, call db.apply\n");
         return db.apply(gs, m, timeout);
     });
 }
@@ -1539,7 +1539,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto lmutate = [handler_ptr, response_id, this, my_address, timeout] (lw_shared_ptr<const frozen_mutation> m) mutable {
         tracing::trace(handler_ptr->get_trace_state(), "Executing a mutation locally");
         auto s = handler_ptr->get_schema();
-        print("sp::send_to_live_endpoints -> cf.views.empty, so apply mutation locally\n");
+        print("sp::send_to_live_endpoints -> cf.views.empty, so apply mutation locally.move handler's scheme to mutate_locally\n");
         return mutate_locally(std::move(s), *m, timeout).then([response_id, this, my_address, m, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
@@ -3173,7 +3173,6 @@ storage_proxy::do_query(schema_ptr s,
 
     if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
         try {
-            print("partition_range[0] is_single_partition\n");
             return query_singular(cmd, std::move(partition_ranges), cl, std::move(trace_state)).finally([lc, p] () mutable {
                     p->_stats.read.mark(lc.stop().latency());
                     if (lc.is_start()) {

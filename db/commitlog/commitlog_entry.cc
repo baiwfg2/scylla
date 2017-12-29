@@ -39,14 +39,15 @@ void commitlog_entry_writer::serialize(Output& out) const {
     print("commitlog_entry_writer::serialize -> convert out=%s to wr=ser::writer_of_commitlog_entry<Output> type\n",typeid(out).name());
     [this, wr = ser::writer_of_commitlog_entry<Output>(out)] () mutable {
         if (_with_schema) {
-            print("commitlog_entry_writer::serialize -> _with_schema=true,call wr.write_mapping, which returns after_commitlog_entry__mapping\n");
+            //print("commitlog_entry_writer::serialize -> _with_schema=true,call wr.write_mapping, which returns after_commitlog_entry__mapping\n");
             return std::move(wr).write_mapping(_schema->get_column_mapping());
         } else {
-            print("commitlog_entry_writer::serialize -> _with_schema=false,call wr.skip_mapping, which returns after_commitlog_entry__mapping\n");
+            //print("commitlog_entry_writer::serialize -> _with_schema=false,call wr.skip_mapping, which returns after_commitlog_entry__mapping\n");
             return std::move(wr).skip_mapping();
         }
-        print("commitlog_entry_writer::serialize -> after write_mapping or skip_mapping, call after_commitlog_entry__mapping::write_mutation, \
+        /*print("commitlog_entry_writer::serialize -> after write_mapping or skip_mapping, call after_commitlog_entry__mapping::write_mutation, \
 \033[34mwhich inside call the global serialize(), then call after_commitlog_entry__mapping::end_commitlog_entry()\033[0m\n\n");
+*/
     }().write_mutation(_mutation).end_commitlog_entry();
 }
 
@@ -54,7 +55,7 @@ void commitlog_entry_writer::compute_size() {
     seastar::measuring_output_stream ms;
     serialize(ms);
     _size = ms.size();
-    print("commitlog_entry_writer::compute_size -> called by set_with_schema, create a local measuring_output_stream and assign its serialized size to this._size=%d\n",_size);
+    //print("commitlog_entry_writer::compute_size -> called by set_with_schema, create a local measuring_output_stream and assign its serialized size to this._size=%d\n",_size);
 }
 
 void commitlog_entry_writer::write(data_output& out) const {

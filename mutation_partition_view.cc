@@ -191,6 +191,7 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
     auto in = _in;
     auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
 
+    //print("mpv::accept -> visitor %s call accept_partition_tombstone()\n",typeid(visitor).name());
     visitor.accept_partition_tombstone(mpv.tomb());
 
     struct static_row_cell_visitor {
@@ -203,12 +204,14 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
            _visitor.accept_static_cell(id, cm);
         }
     };
+    //print("mpv::accept -> call read_and_visit_row()\n");
     read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
 
     for (auto&& rt : mpv.range_tombstones()) {
         visitor.accept_row_tombstone(rt);
     }
 
+    //print("mpv::accept -> call row_tombstone for mpv.rows()\n");
     for (auto&& cr : mpv.rows()) {
         auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
         visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()));

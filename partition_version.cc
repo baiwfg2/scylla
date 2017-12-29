@@ -211,12 +211,12 @@ void partition_entry::set_version(partition_version* new_version)
 void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema)
 {
     if (!_snapshot) {
-        print("partition_entry::apply -> _snapshot=false, call partition.apply()\n");
+        print("partition_entry::apply1 -> _snapshot=null, call partition.apply()\n");
         _version->partition().apply(s, mp, mp_schema);
     } else {
         mutation_partition mp1 = mp;
         if (s.version() != mp_schema.version()) {
-            print("partition_entry::apply -> version not equal, upgrade(mp_schema,schema)\n");
+            print("partition_entry::apply1 -> version not equal, upgrade(mp_schema,schema)\n");
             mp1.upgrade(mp_schema, s);
         }
         auto new_version = current_allocator().construct<partition_version>(std::move(mp1));
@@ -229,8 +229,10 @@ void partition_entry::apply(const schema& s, const mutation_partition& mp, const
 void partition_entry::apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema)
 {
     if (!_snapshot) {
+        print("partition_entry::apply2 -> _snapshot=null, call partition.apply()\n");
         _version->partition().apply(s, mpv, mp_schema);
     } else {
+        print("partition_entry::apply2 -> _snapshot not null, create mutation_partition,mp.apply()\n");
         mutation_partition mp(s.shared_from_this());
         mp.apply(s, mpv, mp_schema);
         auto new_version = current_allocator().construct<partition_version>(std::move(mp));
