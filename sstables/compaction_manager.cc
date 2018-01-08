@@ -384,6 +384,7 @@ void compaction_manager::start() {
 }
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
+    cmlog.info("compaction_manager::compaction_submission_callback -> compaction submission time up! submit every CF in _compaction_locks");
     return [this] () mutable {
         for (auto& e: _compaction_locks) {
             submit(e.first);
@@ -455,6 +456,7 @@ void compaction_manager::submit(column_family* cf) {
     _tasks.push_back(task);
     _stats.pending_tasks++;
 
+    print("compaction_manager::submit -> compact CF=%s\n",*cf);
     task->compaction_done = repeat([this, task, cf] () mutable {
         if (!can_proceed(task)) {
             _stats.pending_tasks--;

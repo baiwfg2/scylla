@@ -321,14 +321,14 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
 void
 mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
     if (s.version() != p_schema.version()) {
-        print("mutation_partition::apply -> s.version() != p_schema.version()\n");
+        //print("mutation_partition::apply -> s.version() != p_schema.version()\n");
         auto p2 = p;
         p2.upgrade(p_schema, s);
         apply(s, std::move(p2));
         return;
     }
 
-    print("mutation_partition::apply -> assign mp to tmp_mp\n");
+    //print("mutation_partition::apply -> assign mp to tmp_mp\n");
     mutation_partition tmp(p);
     apply(s, std::move(tmp));
 }
@@ -383,7 +383,7 @@ mutation_partition::apply(const schema& s, mutation_partition&& p, const schema&
 
 void
 mutation_partition::apply(const schema& s, mutation_partition&& p) {
-    print("mp::apply2 -> handle static row and row_tombstone, passed with schema and mutation_partition\n");
+    //print("mp::apply2 -> handle static row and row_tombstone, passed with schema and mutation_partition\n");
     auto revert_row_tombstones = _row_tombstones.apply_reversibly(s, p._row_tombstones);
 
     _static_row.apply_reversibly(s, column_kind::static_column, p._static_row);
@@ -1980,6 +1980,7 @@ future<> data_query(
             *s, query_time, slice, row_limit, partition_limit, std::move(qrb));
 
     auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
+    print("data_query -> create <result_builder,mutation_consumer,mutation_reader>, ready to call consume_flattened\n");
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }
 

@@ -1008,6 +1008,7 @@ column_family::seal_active_memtable(flush_permit&& permit) {
         return repeat([this, old, &permit] () mutable {
             auto sstable_write_permit = permit.release_sstable_write_permit();
             return with_lock(_sstables_lock.for_read(), [this, old, sstable_write_permit = std::move(sstable_write_permit)] () mutable {
+                print("column_family::seal_active_memtable -> probably from flush_one(), ready to call try_flush_memtable_to_sstable\n");
                 return this->try_flush_memtable_to_sstable(old, std::move(sstable_write_permit));
             }).then([this, &permit] (auto should_stop) mutable {
                 if (should_stop) {
@@ -1022,11 +1023,13 @@ column_family::seal_active_memtable(flush_permit&& permit) {
             });
         });
     }).then([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush)] () mutable {
+        print("column_family::seal_active_memtable -> pending flush done, ready to decrease metrics\n");
         _stats.pending_flushes--;
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
 
         if (_commitlog) {
+            print("column_family::seal_active_memtable -> discard corresponding commitlog\n");
             _commitlog->discard_completed_segments(_schema->id(), old->rp_set());
         }
         return previous_flush.finally([op = std::move(op)] { });
@@ -3290,6 +3293,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
+                print("dirty_memory_manager::flush_when_needed -> pick the largest memtable and call flush_one(memtable_list,permit)\n");
                 this->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
                 return make_ready_future<>();
             });
@@ -3313,7 +3317,7 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
             auto& cf = find_column_family(m.column_family_id());
-            print("db::apply_in_memory -> when cf.dirty_memory_region_group's parents have no blocked_requests and no pressue, cur lambda is called. In it, cf.apply()\n");
+            print("\t\t\tdb::apply_in_memory -> when cf.dirty_memory_region_group's parents have no blocked_requests and no pressue, cur lambda is called. In it, cf.apply()\n");
             cf.apply(m, m_schema, std::move(h));
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
@@ -3369,14 +3373,12 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
     auto cl = cf.commitlog();
     if (cl != nullptr) {
-        print("db::apply_with_commitlog -> \033[34mcf.commitlog not null,pass schema and mutation to commitlog_entry_writer for later write\033[0m\n");
+        print("\tdb::apply_with_commitlog -> \033[34mcf=[\t%s\t], its commitlog not null,so pass schema and mutation to commitlog_entry_writer for later write\033[0m\n",cf);
         commitlog_entry_writer cew(s, m);
         return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
-            print("db::apply_with_commitlog -> cf.commitlog() add_entry ok, rp_handle.replay_pos=%s, ready to apply_in_memory\n",h.rp());
             return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception(maybe_handle_reorder);
         });
     }
-    print("db::apply_with_commitlog -> cf.commitlog is null, call apply_in_memory directly\n");
     return apply_in_memory(m, std::move(s), {}, timeout);
 }
 
@@ -3391,7 +3393,6 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
                                  s->ks_name(), s->cf_name(), s->version()));
     }
     if (cf.views().empty()) {
-        print("db::do_apply -> cf views empty, call apply_with_commitlog\n");
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
     }
     print("db::do_apply -> cf views not empty, call cf.push_view_replica_updates\n");
@@ -3423,7 +3424,7 @@ Future database::update_write_metrics(Future&& f) {
             assert(0 && "should not reach");
         }
         ++s->total_writes;
-        print("db::update_write_metrics -> check apply_stage's results, good, total_write=%d\n",s->total_writes);
+        print("db::update_write_metrics -> check apply_stage's results, good\n");
         return f;
     });
 }
@@ -3432,7 +3433,6 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    print("db::apply -> ready to create db_apply stage and call do_apply\n");
     return update_write_metrics(apply_stage(this, std::move(s), seastar::cref(m), timeout));
 }
 

@@ -319,6 +319,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     // is no way to tell which of these rows belong to the query result before
     // doing post-query ordering.
     if (needs_post_query_ordering() && _limit) {
+        print("select_statement::execute -> need post query ordering\n");
         return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd](auto prs) {
             assert(cmd->partition_limit == query::max_partitions);
             query::result_merger merger(cmd->row_limit * prs.size(), query::max_partitions);

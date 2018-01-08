@@ -166,7 +166,7 @@ modification_statement::get_mutations(distributed<service::storage_proxy>& proxy
                     }
                 }
                 std::for_each(mutations.begin(),mutations.end(),[](auto mutation) {
-                    print("modification_statement::get_mutations -> assemble update_parameter and partition_keys,clustering_ranges into mutation=%s\n",mutation);
+                    print("modification_statement::get_mutations -> assemble update_parameter and partition_keys,clustering_ranges into mutation=??\n");
                     });
 
                 return make_ready_future<decltype(mutations)>(std::move(mutations));
@@ -269,7 +269,7 @@ modification_statement::read_required_rows(
         db::consistency_level cl,
         tracing::trace_state_ptr trace_state) {
     if (!requires_read()) {
-        print("modification_statement::read_required_rows > not required read\n");
+        print("modification_statement::read_required_rows > not required read of all operations in _column_opertions\n");
         return make_ready_future<update_parameters::prefetched_rows_type>(
                 update_parameters::prefetched_rows_type{});
     }

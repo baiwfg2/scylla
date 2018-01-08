@@ -1900,6 +1900,7 @@ public:
             if (!_data_result) {
                 _data_result = std::move(result);
             }
+            print("digest_read_resolver::add_data -> call got_response\n");
             got_response(from);
         }
     }
@@ -1928,11 +1929,13 @@ public:
             }
             if (_cl_responses >= _block_for && _data_result) {
                 _cl_reported = true;
+                print("digest_read_resolver::got_response -> _cl_promise fulfiled\n");
                 _cl_promise.set_value(std::move(_data_result), digests_match());
             }
         }
         if (is_completed()) {
             _timeout.cancel();
+            print("digest_read_resolver::got_response -> recv response.count = target.count, _done_promise set\n");
             _done_promise.set_value();
         }
     }
@@ -2488,11 +2491,14 @@ protected:
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
             auto qrr = want_digest ? query::result_request::result_and_digest : query::result_request::only_result;
+            print("abstract_read_executor::make_data_request -> data request sent to me, ready to call qp.query_result_local\n");
             return _proxy->query_result_local(_schema, _cmd, _partition_range, qrr, _trace_state);
         } else {
             auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
             auto da = want_digest ? query::digest_algorithm::MD5 : query::digest_algorithm::none;
+
+            print("abstract_read_executor::make_data_request -> data request sent to other node, ready to call send_read_data with message_service\n");
             return ms.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, da).then([this, ep](query::result&& result, rpc::optional<cache_temperature> hit_rate) {
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid()));
@@ -2660,6 +2666,7 @@ public:
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for, timeout);
         auto exec = shared_from_this();
 
+        print("abstract_read_executor::execute -> ready to send request to replicas\n");
         make_requests(digest_resolver, timeout).finally([exec]() {
             // hold on to executor until all queries are complete
         });
@@ -2674,9 +2681,10 @@ public:
                 std::tie(result, digests_match) = f.get(); // can throw
 
                 if (digests_match) {
-                    //print("digests_match ! setting exec->result_promise value\n");
+                    print("abstract_read_executor::execute -> digests match. setting %s->result_promise value\n",typeid(*exec).name());
                     exec->_result_promise.set_value(std::move(result));
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
+                        print("abstract_read_executor::execute -> there're more targets than CL, set background_repair_check = true\n");
                         background_repair_check = true;
                     }
                 } else { // digest mismatch
@@ -2892,6 +2900,7 @@ future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>
 storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_request request, tracing::trace_state_ptr trace_state, uint64_t max_size) {
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
+        print("storage_proxy::query_result_local -> read data with calling db.query on some shard\n");
         return _db.invoke_on(shard, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, request, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
             tracing::trace(gt, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
             return db.query(gs, *cmd, request, prv, gt, max_size).then([trace_state = gt.get()](auto&& f, cache_temperature ht) {
@@ -2938,9 +2947,11 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, dht::parti
     query::result_merger merger(cmd->row_limit, cmd->partition_limit);
     merger.reserve(exec.size());
 
+    print("storage_proxy::query_singular -> read_executor size=%d, ready to do map_reduce\n",exec.size());
     auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
         utils::latency_counter lc;
         lc.start();
+        print("storage_proxy::query_singular ::map_reduce -> read_executor=%s\n",typeid(rex).name());
         return rex->execute(timeout).finally([lc, rex] () mutable {
             if (lc.is_start()) {
                 rex->get_cf()->add_coordinator_read_latency(lc.stop().latency());

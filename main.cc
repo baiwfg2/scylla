@@ -303,7 +303,7 @@ int main(int ac, char** av) {
 
     return app.run_deprecated(ac, av, [&] {
         auto t = time(0);
-        printf("%s debug# main thread 0x%lx: app::run_deprecated's func started\n",ctime(&t), pthread_self());
+        printf("%s debug# main thread 0x%lx: app::run_deprecated's lambda called\n",ctime(&t), pthread_self());
         if (help_version) {
             print("%s\n", scylla_version());
             engine().exit(0);
@@ -677,7 +677,7 @@ int main(int ac, char** av) {
                     return db.get_compaction_manager().stop();
                 });
             });
-			printf("debug#seastar::async end.Things done: create and start db,mm,qp,sp ... on lcore, start rpc,api,thrift, load all kinds of directories, do compaction\n");
+			startlog.info("debug#seastar::async end.Things done: create and start db,mm,qp,sp ... on lcore, start rpc,api,thrift, load all kinds of directories, do compaction");
         }).then_wrapped([&return_value] (auto && f) {
             try {
                 f.get();

@@ -811,7 +811,7 @@ public:
         auto * p = _buffer.get_write() + pos;
         auto * e = _buffer.get_write() + pos + s - sizeof(uint32_t);
 
-        print("seg::allocate -> part space of segment's _buffer [%p-%p]={total_size %d - sizeof(uint32_t)} passed to data_output._ptr, later on which mutation is serilized on\n",p,e,s);
+        print("seg::allocate -> part space of segment's _buffer passed to data_output._ptr, later on which mutation is serilized on\n");
         data_output out(p, e);
         crc32_nbo crc;
 
